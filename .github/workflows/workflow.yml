@@ -20,6 +20,8 @@ jobs:
     steps:
     - uses: actions/checkout@v7
     - uses: astral-sh/setup-uv@v7
+      with:
+        python-version: "3.14"
     - name: "lint: isort"
       run: make isort
     - name: "lint: black"

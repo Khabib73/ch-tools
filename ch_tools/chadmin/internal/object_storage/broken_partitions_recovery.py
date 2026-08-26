@@ -7,13 +7,14 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from boto3 import client as Boto3Client
-from botocore.exceptions import ClientError
 from click import Context
 
 from ch_tools.chadmin.internal.object_storage.s3_object_metadata import (
     S3ObjectLocalInfo,
     S3ObjectLocalMetaData,
     get_object_storage_key,
+    object_exists,
+    restore_empty_object,
 )
 from ch_tools.chadmin.internal.part import (
     list_detached_parts,
@@ -77,17 +78,6 @@ class PartRecoveryResult:
     has_unresolved: bool
 
 
-def check_key_in_object_storage(s3_client: Boto3Client, bucket: str, key: str) -> bool:
-    try:
-        s3_client.head_object(Bucket=bucket, Key=key)
-    except ClientError as e:
-        code = e.response.get("Error", {}).get("Code", "")
-        if code in ("404", "NoSuchKey", "NotFound"):
-            return False
-        raise
-    return True
-
-
 def restore_recoverable_broken_partitions(
     ctx: Context,
     root_path: str,
@@ -108,6 +98,7 @@ def restore_recoverable_broken_partitions(
                 broken_part=broken_part,
                 s3_client=s3_client,
                 bucket=disk_conf.bucket_name,
+                prefix=disk_conf.prefix,
             )
             for broken_part in partition_broken_parts
         ]
@@ -197,9 +188,7 @@ def find_broken_parts(
 
             for object_info in metadata.objects:
                 object_key = get_object_storage_key(disk_conf.prefix, object_info)
-                if check_key_in_object_storage(
-                    s3_client, disk_conf.bucket_name, object_key
-                ):
+                if object_exists(s3_client, disk_conf.bucket_name, object_key):
                     continue
 
                 broken_part = broken_parts_by_path.setdefault(
@@ -223,6 +212,7 @@ def restore_recoverable_broken_part(
     broken_part: BrokenPart,
     s3_client: Boto3Client,
     bucket: str,
+    prefix: str,
 ) -> PartRecoveryResult:
     report: List[Dict[str, Any]] = []
 
@@ -251,6 +241,7 @@ def restore_recoverable_broken_part(
                     missing_objects,
                     s3_client,
                     bucket,
+                    prefix,
                 )
             )
         elif filename == "default_compression_codec.txt":
@@ -265,6 +256,7 @@ def restore_recoverable_broken_part(
                     missing_objects,
                     s3_client,
                     bucket,
+                    prefix,
                 )
             )
         else:
@@ -320,9 +312,7 @@ def restore_empty_objects(
 ) -> List[Dict[str, Any]]:
     report: List[Dict[str, Any]] = []
     for missing_object in missing_objects:
-        s3_client.put_object(Bucket=bucket, Key=missing_object.object_key, Body=b"")
-        head = s3_client.head_object(Bucket=bucket, Key=missing_object.object_key)
-        if head.get("ContentLength") == 0:
+        if restore_empty_object(s3_client, bucket, missing_object.object_key):
             report.append(
                 make_restore_report(
                     part_info,
@@ -350,6 +340,7 @@ def restore_generated_file(
     missing_objects: List[MissingObject],
     s3_client: Boto3Client,
     bucket: str,
+    prefix: str,
 ) -> Dict[str, Any]:
     metadata = missing_objects[0].metadata
     total_object_size = sum(item.size for item in metadata.objects)
@@ -365,7 +356,7 @@ def restore_generated_file(
     offset = 0
     chunks_to_upload: List[Tuple[str, bytes]] = []
     for object_info in metadata.objects:
-        object_key = get_full_object_key_from_sample(missing_objects[0], object_info)
+        object_key = get_object_storage_key(prefix, object_info)
         chunk = content[offset : offset + object_info.size]
         offset += object_info.size
         if object_key in missing_keys:
@@ -686,17 +677,6 @@ def make_restore_report(
 
 def make_partition_report(part_info: BrokenPartInfo) -> Dict[str, Any]:
     return {"table": part_info.table_id, "partition": part_info.partition_id}
-
-
-def get_full_object_key_from_sample(
-    sample_missing_object: MissingObject, object_info: S3ObjectLocalInfo
-) -> str:
-    if object_info.key_is_full:
-        return object_info.key
-    sample_key = sample_missing_object.object_info.key
-    sample_full_key = sample_missing_object.object_key
-    prefix = sample_full_key[: -len(sample_key)] if sample_key else ""
-    return os.path.join(prefix, object_info.key)
 
 
 def get_active_parts_by_path(ctx: Context) -> Dict[str, BrokenPartInfo]:

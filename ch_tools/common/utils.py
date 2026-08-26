@@ -7,6 +7,38 @@ from typing import Any, Dict, List, Union
 from click import Context
 
 
+def escape_for_file_name(value: str) -> str:
+    """Escape UTF-8 bytes using ClickHouse's ``escapeForFileName`` format."""
+    result = []
+    for byte in value.encode():
+        char = chr(byte)
+        if char.isascii() and (char.isalnum() or char == "_"):
+            result.append(char)
+        else:
+            result.append(f"%{byte:02X}")
+    return "".join(result)
+
+
+def unescape_for_file_name(value: str) -> str:
+    """Decode ClickHouse ``escapeForFileName`` sequences as UTF-8 bytes."""
+    result = bytearray()
+    index = 0
+    while index < len(value):
+        if value[index] == "%" and index + 2 < len(value):
+            encoded_byte = value[index + 1 : index + 3]
+            try:
+                result.append(int(encoded_byte, 16))
+            except ValueError:
+                pass
+            else:
+                index += 3
+                continue
+
+        result.extend(value[index].encode())
+        index += 1
+    return result.decode()
+
+
 def version_ge(version1: str, version2: str) -> bool:
     """
     Return True if version1 is greater or equal than version2.

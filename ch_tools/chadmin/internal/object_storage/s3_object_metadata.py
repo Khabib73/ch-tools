@@ -1,8 +1,10 @@
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List
+
+from boto3 import client as Boto3Client
+from botocore.exceptions import ClientError
 
 MAX_METADATA_FILE_SIZE = 10 * 1024
 VERSION_FULL_OBJECT_KEY = 5
@@ -112,7 +114,32 @@ class S3ObjectLocalMetaData:
         return self._version_with_full_object_key(self.version)
 
 
-def get_object_storage_key(prefix: str, s3_object: S3ObjectLocalInfo) -> str:
-    if s3_object.key_is_full:
-        return s3_object.key
-    return os.path.join(prefix, s3_object.key)
+def get_object_storage_key(prefix: str, object_info: S3ObjectLocalInfo) -> str:
+    """Return an object key with the configured disk prefix applied."""
+    if object_info.key_is_full:
+        return object_info.key
+
+    normalized_prefix = prefix.rstrip("/")
+    normalized_key = object_info.key.lstrip("/")
+    if not normalized_prefix:
+        return normalized_key
+    return f"{normalized_prefix}/{normalized_key}"
+
+
+def object_exists(s3_client: Boto3Client, bucket: str, key: str) -> bool:
+    """Check an object without hiding authorization or transport errors."""
+    try:
+        s3_client.head_object(Bucket=bucket, Key=key)
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code", "")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+    return True
+
+
+def restore_empty_object(s3_client: Boto3Client, bucket: str, key: str) -> bool:
+    """Upload a known-empty object and verify that it remained empty."""
+    s3_client.put_object(Bucket=bucket, Key=key, Body=b"")
+    head = s3_client.head_object(Bucket=bucket, Key=key)
+    return head.get("ContentLength") == 0

@@ -18,7 +18,9 @@ def create() -> dict:
                 "clickhouse": 9000,
                 "keeper": 2281,
             },
-            "depends_on": ["zookeeper"],
+            "depends_on": {
+                "zookeeper": "service_healthy",
+            },
             "args": {
                 "CLICKHOUSE_VERSION": "${CLICKHOUSE_VERSION:-latest}",
             },
@@ -31,6 +33,19 @@ def create() -> dict:
             "instances": ["zookeeper01"],
             "expose": {
                 "tcp": 2181,
+            },
+            "args": {
+                "CLICKHOUSE_VERSION": "${CLICKHOUSE_VERSION:-latest}",
+            },
+            "healthcheck": {
+                "test": [
+                    "CMD-SHELL",
+                    "echo mntr | nc 127.0.0.1 2181 "
+                    "| grep -q '^zk_server_state[[:space:]]'",
+                ],
+                "interval": "500ms",
+                "timeout": "1s",
+                "retries": 60,
             },
         },
         "minio": {

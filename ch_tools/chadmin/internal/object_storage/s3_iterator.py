@@ -5,7 +5,7 @@ from botocore.client import Config
 
 from ch_tools.common.clickhouse.config.storage_configuration import S3DiskConfiguration
 
-ObjectSummary = Any
+ObjectSummary = Any # pylint: disable-next=invalid-name
 IGNORED_OBJECT_NAME_PREFIXES = ["operations", ".SCHEMA_VERSION"]
 
 
